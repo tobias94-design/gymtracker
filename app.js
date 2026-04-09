@@ -1,64 +1,63 @@
-°°/* ─────────────────────────────────────────────────────
+/* ═══════════════════════════════════════════════════
    GYMTRACKER — app.js
-   Stack: Vanilla JS + SheetJS + Chart.js + localStorage
-   ───────────────────────────────────────────────────── */
+   Fix: Safari iOS FileReader + mobile UX
+   ═══════════════════════════════════════════════════ */
 
 /* ── STATE ── */
 let state = {
-  schede: [],          // Array of parsed workout plans from Excel
-  logs: {},            // { "schedaId_week_schedaIdx_exIdx_setIdx": {reps, kg, done}, ... }
-  sessionLogs: {},     // Saved sessions { "schedaId_week_schedaIdx": { exercises:[...], date } }
-  activeSchedaId: null,
-  currentView: 'dashboard'
+  schede: [],
+  sessionLogs: {},
+  activeSchedaId: null
 };
 
-/* ── STORAGE ── */
-const STORAGE_KEY = 'gymtracker_v2';
+const STORAGE_KEY = 'gymtracker_v3';
 
 function saveState() {
-  const toSave = { schede: state.schede, logs: state.logs, sessionLogs: state.sessionLogs, activeSchedaId: state.activeSchedaId };
-  localStorage.setItem(STORAGE_KEY, JSON.stringify(toSave));
+  try {
+    localStorage.setItem(STORAGE_KEY, JSON.stringify({
+      schede: state.schede,
+      sessionLogs: state.sessionLogs,
+      activeSchedaId: state.activeSchedaId
+    }));
+  } catch(e) { showToast('Errore salvataggio: storage pieno?', 'error'); }
 }
 
 function loadState() {
   try {
     const raw = localStorage.getItem(STORAGE_KEY);
-    if (!raw) return;
-    const saved = JSON.parse(raw);
-    Object.assign(state, saved);
-  } catch (e) { console.warn('State load error', e); }
+    if (raw) Object.assign(state, JSON.parse(raw));
+  } catch(e) {}
 }
 
-/* ── NAV ── */
-document.querySelectorAll('.nav-btn').forEach(btn => {
-  btn.addEventListener('click', () => {
-    const view = btn.dataset.view;
-    document.querySelectorAll('.nav-btn').forEach(b => b.classList.remove('active'));
-    btn.classList.add('active');
-    document.querySelectorAll('.view').forEach(v => v.classList.remove('active'));
-    document.getElementById('view-' + view).classList.add('active');
-    state.currentView = view;
-    if (view === 'dashboard') renderDashboard();
-    if (view === 'workout') renderWorkoutView();
-    if (view === 'analytics') renderAnalytics();
+/* ── NAVIGATION ── */
+function navigate(view) {
+  document.querySelectorAll('.nav-btn, .bnav-btn').forEach(b => {
+    b.classList.toggle('active', b.dataset.view === view);
   });
+  document.querySelectorAll('.view').forEach(v => v.classList.remove('active'));
+  document.getElementById('view-' + view)?.classList.add('active');
+
+  if (view === 'dashboard') renderDashboard();
+  if (view === 'workout') renderWorkoutView();
+  if (view === 'analytics') renderAnalytics();
+}
+
+document.querySelectorAll('.nav-btn, .bnav-btn').forEach(btn => {
+  btn.addEventListener('click', () => navigate(btn.dataset.view));
 });
 
-/* ─────────────────────────────────────────────────────
+/* ═══════════════════════════════════════════════════
    EXCEL PARSER
-   Handles flexible structure: each block starts with a
-   row containing "SETTIMANA 1" in first column.
-   ───────────────────────────────────────────────────── */
-function parseExcel(data) {
-  const workbook = XLSX.read(data, { type: 'array' });
+   ═══════════════════════════════════════════════════ */
+function parseExcel(arrayBuffer) {
+  const workbook = XLSX.read(arrayBuffer, { type: 'array' });
   const allSchede = [];
 
   workbook.SheetNames.forEach(sheetName => {
     const sheet = workbook.Sheets[sheetName];
     const rows = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: '' });
-    const blocks = splitIntoBlocks(rows);
-    blocks.forEach((block, idx) => {
-      const scheda = parseBlock(block, idx, sheetName);
+    splitIntoBlocks(rows).forEach((block, idx) => {
+      const scheda = parseBlock(block, idx);
       if (scheda) allSchede.push(scheda);
     });
   });
@@ -70,8 +69,9 @@ function splitIntoBlocks(rows) {
   const blocks = [];
   let current = [];
   for (const row of rows) {
-    const firstCell = String(row[0] || '').trim().toUpperCase();
-    if (firstCell.includes('SETTIMANA') && firstCell.includes('1')) {
+    const cell = String(row[0] || '').trim().toUpperCase();
+    // detect "SETTIMANA 1" or "SETTIMANA1"
+    if (cell.replace(/\s/g,'').includes('SETTIMANA1')) {
       if (current.length > 1) blocks.push(current);
       current = [row];
     } else {
@@ -82,207 +82,218 @@ function splitIntoBlocks(rows) {
   return blocks;
 }
 
-function parseBlock(rows, idx, sheetName) {
+function parseBlock(rows, idx) {
   if (rows.length < 3) return null;
 
-  // Row 0: week headers (SETTIMANA 1, 2, 3, 4)
-  // Row 1: column headers (ESERCIZIO, SERIE, RIPETIZIONI, RECUPERO, KG per week)
+  // Row 0: week column headers
+  // Row 1: field headers (esercizio, serie, rip, recupero, kg)
   // Row 2+: exercises
 
   const headerRow = rows[0];
-  const colRow = rows[1];
 
-  // Find week column offsets
-  const weekOffsets = [];
+  // Find week start columns
+  const weekCols = [];
   headerRow.forEach((cell, i) => {
-    if (String(cell).toUpperCase().includes('SETTIMANA')) {
-      weekOffsets.push(i);
-    }
+    if (String(cell).toUpperCase().replace(/\s/g,'').includes('SETTIMANA')) weekCols.push(i);
   });
-
-  if (weekOffsets.length === 0) return null;
-
-  // Detect how many columns per week block (SERIE, RIP, RECUPERO, KG = 4 cols after ESERCIZIO)
-  // First week starts at offset 0: col0=esercizio, col1=serie, col2=rip, col3=recupero, col4=kg
-  // Other weeks: same 4 cols but without esercizio
+  if (weekCols.length === 0) return null;
 
   const exercises = [];
 
   for (let r = 2; r < rows.length; r++) {
     const row = rows[r];
-    const esercizio = String(row[0] || '').trim();
-    if (!esercizio) continue;
+    const name = String(row[0] || '').trim();
+    if (!name) continue;
 
-    const weeks = [];
-    weekOffsets.forEach((wOff, wIdx) => {
+    const weeks = weekCols.map((wOff, wIdx) => {
       if (wIdx === 0) {
-        // First week: cols 1-4 relative to block start
-        weeks.push({
-          serie: String(row[1] || '').trim(),
-          ripetizioni: String(row[2] || '').trim(),
-          recupero: String(row[3] || '').trim(),
-          kg: String(row[4] || '').trim()
-        });
-      } else {
-        // Subsequent weeks: offset into the row
-        const base = wOff;
-        weeks.push({
-          serie: String(row[base] || '').trim(),
-          ripetizioni: String(row[base + 1] || '').trim(),
-          recupero: String(row[base + 2] || '').trim(),
-          kg: String(row[base + 3] || '').trim()
-        });
+        return {
+          serie: str(row[1]), ripetizioni: str(row[2]),
+          recupero: str(row[3]), kg: str(row[4])
+        };
       }
+      return {
+        serie: str(row[wOff]), ripetizioni: str(row[wOff+1]),
+        recupero: str(row[wOff+2]), kg: str(row[wOff+3])
+      };
     });
 
-    exercises.push({ name: esercizio, weeks });
+    exercises.push({ name, weeks });
   }
 
-  if (exercises.length === 0) return null;
-
-  const numWeeks = exercises[0].weeks.length;
+  if (!exercises.length) return null;
 
   return {
-    id: `scheda_${Date.now()}_${idx}`,
+    id: `sc_${Date.now()}_${idx}`,
     name: `Scheda ${String.fromCharCode(65 + idx)}`,
-    sheetName,
-    numWeeks,
+    numWeeks: exercises[0].weeks.length,
     exercises,
     importedAt: new Date().toISOString()
   };
 }
 
-/* Compute number of sets from serie string like "4", "2 + 2", "3" */
+function str(v) { const s = String(v ?? '').trim(); return s === 'NaN' ? '' : s; }
+
 function parseSets(serieStr) {
-  if (!serieStr) return 3;
-  const s = String(serieStr).trim();
-  if (s.includes('+')) {
-    return s.split('+').reduce((acc, n) => acc + (parseInt(n.trim()) || 1), 0);
-  }
+  const s = str(serieStr);
+  if (s.includes('+')) return s.split('+').reduce((a, n) => a + (parseInt(n) || 1), 0);
   const n = parseInt(s);
-  return isNaN(n) ? 3 : n;
+  return isNaN(n) ? 3 : Math.max(1, Math.min(n, 20));
 }
 
-/* Parse kg target — may be relative like "-2" or absolute */
 function parseKg(kgStr) {
-  const s = String(kgStr || '').trim();
-  if (!s || s === 'NaN' || s === '') return null;
-  const n = parseFloat(s);
+  const n = parseFloat(str(kgStr));
   return isNaN(n) ? null : n;
 }
 
-/* ─────────────────────────────────────────────────────
-   IMPORT VIEW
-   ───────────────────────────────────────────────────── */
-const dropZone = document.getElementById('dropZone');
-const fileInput = document.getElementById('fileInput');
-const importPreview = document.getElementById('importPreview');
-const importArea = document.getElementById('importArea');
-
+/* ═══════════════════════════════════════════════════
+   IMPORT VIEW — Safari iOS fix
+   Key: use FileReader.readAsArrayBuffer directly,
+   avoid Blob/URL methods that fail in Safari WKWebView
+   ═══════════════════════════════════════════════════ */
 let parsedPreview = [];
 
-dropZone.addEventListener('dragover', e => { e.preventDefault(); dropZone.classList.add('drag-over'); });
-dropZone.addEventListener('dragleave', () => dropZone.classList.remove('drag-over'));
+const fileInput = document.getElementById('fileInput');
+const importArea = document.getElementById('importArea');
+const importPreview = document.getElementById('importPreview');
+const importStatus = document.getElementById('importStatus');
+
+fileInput.addEventListener('change', function(e) {
+  const file = e.target.files && e.target.files[0];
+  if (!file) return;
+  handleFile(file);
+  // Reset input so same file can be re-selected
+  this.value = '';
+});
+
+// Drag & drop (desktop)
+const dropZone = document.getElementById('dropZone');
+dropZone.addEventListener('dragover', e => { e.preventDefault(); dropZone.style.borderColor = 'var(--accent)'; });
+dropZone.addEventListener('dragleave', () => { dropZone.style.borderColor = ''; });
 dropZone.addEventListener('drop', e => {
   e.preventDefault();
-  dropZone.classList.remove('drag-over');
-  handleFile(e.dataTransfer.files[0]);
+  dropZone.style.borderColor = '';
+  const file = e.dataTransfer.files[0];
+  if (file) handleFile(file);
 });
-fileInput.addEventListener('change', e => handleFile(e.target.files[0]));
-document.getElementById('btnReimport').addEventListener('click', () => {
-  importPreview.classList.add('hidden');
-  importArea.classList.remove('hidden');
-  parsedPreview = [];
-});
-document.getElementById('btnConfirm').addEventListener('click', confirmImport);
 
 function handleFile(file) {
-  if (!file) return;
+  showImportStatus('⏳ Lettura file in corso...', 'loading');
+
+  // Use FileReader with readAsArrayBuffer — works on Safari iOS
   const reader = new FileReader();
-  reader.onload = e => {
+
+  reader.onload = function(e) {
     try {
-      const data = new Uint8Array(e.target.result);
-      parsedPreview = parseExcel(data);
-      if (parsedPreview.length === 0) {
-        showToast('Nessuna scheda rilevata nel file. Controlla la struttura.', 'error');
+      const arrayBuffer = e.target.result;
+      if (!arrayBuffer || arrayBuffer.byteLength === 0) {
+        showImportStatus('❌ File vuoto o non leggibile.', 'error');
         return;
       }
-      showPreview(parsedPreview);
-    } catch (err) {
-      showToast('Errore nel leggere il file: ' + err.message, 'error');
+      const schede = parseExcel(arrayBuffer);
+      if (!schede.length) {
+        showImportStatus('❌ Nessuna scheda trovata. Controlla che il file contenga righe con "SETTIMANA 1".', 'error');
+        return;
+      }
+      parsedPreview = schede;
+      hideImportStatus();
+      showPreview(schede);
+    } catch(err) {
+      showImportStatus('❌ Errore: ' + err.message, 'error');
+      console.error(err);
     }
   };
+
+  reader.onerror = function() {
+    showImportStatus('❌ Impossibile leggere il file. Riprova.', 'error');
+  };
+
+  // This is the critical call — readAsArrayBuffer works on Safari iOS
   reader.readAsArrayBuffer(file);
+}
+
+function showImportStatus(msg, type) {
+  importStatus.textContent = msg;
+  importStatus.className = 'import-status ' + type;
+  importStatus.classList.remove('hidden');
+}
+
+function hideImportStatus() {
+  importStatus.classList.add('hidden');
 }
 
 function showPreview(schede) {
   importArea.classList.add('hidden');
   importPreview.classList.remove('hidden');
-  document.getElementById('previewTitle').textContent = `${schede.length} scheda${schede.length > 1 ? 'e' : ''} rilevata${schede.length > 1 ? 'e' : ''}`;
+
+  document.getElementById('previewTitle').textContent =
+    `${schede.length} scheda${schede.length > 1 ? 'e' : ''} rilevata${schede.length > 1 ? 'e' : ''}`;
 
   const container = document.getElementById('previewCards');
   container.innerHTML = '';
 
-  schede.forEach(scheda => {
+  schede.forEach(sc => {
     const div = document.createElement('div');
     div.className = 'preview-scheda';
+
+    const rows = sc.exercises.map(ex => `
+      <tr>
+        <td>${ex.name.length > 40 ? ex.name.slice(0,40)+'…' : ex.name}</td>
+        <td>${ex.weeks[0]?.serie || '—'}</td>
+        <td>${ex.weeks[0]?.ripetizioni || '—'}</td>
+        <td>${ex.weeks[0]?.kg || '—'}</td>
+      </tr>`).join('');
+
     div.innerHTML = `
-      <div class="preview-scheda-title">${scheda.name} — ${scheda.numWeeks} settimane · ${scheda.exercises.length} esercizi</div>
-      <table class="preview-table">
-        <thead><tr><th>Esercizio</th><th>Serie S1</th><th>Rip S1</th><th>Rec S1</th><th>Kg S1</th></tr></thead>
-        <tbody>${scheda.exercises.map(ex => `
-          <tr>
-            <td>${ex.name}</td>
-            <td>${ex.weeks[0]?.serie || '—'}</td>
-            <td>${ex.weeks[0]?.ripetizioni || '—'}</td>
-            <td>${ex.weeks[0]?.recupero || '—'}</td>
-            <td>${ex.weeks[0]?.kg || '—'}</td>
-          </tr>`).join('')}
-        </tbody>
-      </table>`;
+      <div class="preview-scheda-title">${sc.name} — ${sc.numWeeks} sett. · ${sc.exercises.length} esercizi</div>
+      <div style="overflow-x:auto">
+        <table class="preview-table">
+          <thead><tr><th>Esercizio</th><th>Serie</th><th>Rip</th><th>Kg</th></tr></thead>
+          <tbody>${rows}</tbody>
+        </table>
+      </div>`;
     container.appendChild(div);
   });
 }
 
-function confirmImport() {
-  if (parsedPreview.length === 0) return;
+document.getElementById('btnReimport').addEventListener('click', () => {
+  importPreview.classList.add('hidden');
+  importArea.classList.remove('hidden');
+  hideImportStatus();
+  parsedPreview = [];
+});
+
+document.getElementById('btnConfirm').addEventListener('click', () => {
+  if (!parsedPreview.length) return;
   state.schede = parsedPreview;
   state.activeSchedaId = parsedPreview[0].id;
-  state.logs = {};
   state.sessionLogs = {};
   saveState();
-  showToast(`${parsedPreview.length} scheda importata con successo!`, 'success');
-  document.querySelector('[data-view="dashboard"]').click();
-}
+  showToast(`✓ ${parsedPreview.length} scheda importata!`, 'success');
+  navigate('dashboard');
+});
 
-/* ─────────────────────────────────────────────────────
+/* ═══════════════════════════════════════════════════
    DASHBOARD
-   ───────────────────────────────────────────────────── */
-let chartVolume = null;
+   ═══════════════════════════════════════════════════ */
+let chartVolInstance = null;
 
 function renderDashboard() {
-  if (state.schede.length === 0) {
-    document.getElementById('dashSub').textContent = 'Carica una scheda per iniziare';
-    document.getElementById('pillScheda').textContent = '—';
-    document.getElementById('nextWorkoutContent').innerHTML = '<div class="next-empty">Nessuna scheda caricata</div>';
-    updateRing(0);
-    return;
-  }
+  const noData = state.schede.length === 0;
+  document.getElementById('dashSub').textContent = noData
+    ? 'Carica una scheda per iniziare'
+    : `Scheda attiva: ${getActiveScheda()?.name || '—'}`;
+  document.getElementById('pillScheda').textContent = getActiveScheda()?.name || '—';
 
-  const scheda = getActiveScheda();
-  const totalSessions = state.schede.reduce((s, sc) => s + sc.numWeeks, 0) * state.schede.length;
-  const completedSessions = Object.keys(state.sessionLogs).length;
-  const pct = totalSessions > 0 ? Math.round(completedSessions / totalSessions * 100) : 0;
+  const totalSessions = state.schede.reduce((s, sc) => s + sc.numWeeks, 0);
+  const doneSessions = Object.keys(state.sessionLogs).length;
+  const pct = totalSessions > 0 ? Math.round(doneSessions / totalSessions * 100) : 0;
 
-  document.getElementById('dashSub').textContent = `Scheda attiva: ${scheda?.name || '—'}`;
-  document.getElementById('pillScheda').textContent = scheda?.name || '—';
-  document.getElementById('pCompletati').textContent = completedSessions;
+  document.getElementById('pCompletati').textContent = doneSessions;
   document.getElementById('pTotali').textContent = totalSessions;
-  document.getElementById('sidebarWeek').textContent = `W${getCurrentWeek()}`;
-
-  // Week badge
   const { week } = getNextSession();
-  document.getElementById('pSettimana').textContent = `S${week}`;
+  document.getElementById('pSettimana').textContent = week ? `S${week}` : '—';
+  document.getElementById('sidebarWeek').textContent = `W${week || '—'}`;
 
   updateRing(pct);
   renderNextWorkout();
@@ -292,32 +303,29 @@ function renderDashboard() {
 
 function updateRing(pct) {
   const circ = 213.6;
-  const offset = circ - (circ * pct / 100);
-  document.getElementById('ringFill').style.strokeDashoffset = offset;
+  document.getElementById('ringFill').style.strokeDashoffset = circ - circ * pct / 100;
   document.getElementById('ringLabel').textContent = pct + '%';
 }
 
 function getActiveScheda() {
-  return state.schede.find(s => s.id === state.activeSchedaId) || state.schede[0];
+  return state.schede.find(s => s.id === state.activeSchedaId) || state.schede[0] || null;
 }
 
 function getNextSession() {
-  if (state.schede.length === 0) return { scheda: null, schedaIdx: 0, week: 1 };
-  // Find first incomplete session
-  for (let w = 1; w <= 4; w++) {
+  if (!state.schede.length) return { scheda: null, schedaIdx: 0, week: 0 };
+  for (let w = 1; w <= 10; w++) {
     for (let si = 0; si < state.schede.length; si++) {
       const sc = state.schede[si];
       if (w > sc.numWeeks) continue;
-      const key = `${sc.id}_w${w}_s${si}`;
+      const key = sessionKey(sc.id, w, si);
       if (!state.sessionLogs[key]) return { scheda: sc, schedaIdx: si, week: w };
     }
   }
   return { scheda: state.schede[0], schedaIdx: 0, week: 1 };
 }
 
-function getCurrentWeek() {
-  const { week } = getNextSession();
-  return week;
+function sessionKey(schedaId, week, schedaIdx) {
+  return `${schedaId}_w${week}_s${schedaIdx}`;
 }
 
 function renderNextWorkout() {
@@ -325,80 +333,52 @@ function renderNextWorkout() {
   const el = document.getElementById('nextWorkoutContent');
   if (!scheda) { el.innerHTML = '<div class="next-empty">Nessuna scheda caricata</div>'; return; }
 
-  const previewExs = scheda.exercises.slice(0, 4);
+  const preview = scheda.exercises.slice(0, 4);
   el.innerHTML = `
     <div class="next-workout">
-      <div><span class="next-badge">${scheda.name} — Settimana ${week}</span></div>
+      <span class="next-badge">${scheda.name} — Settimana ${week}</span>
       <div class="next-exercises">
-        ${previewExs.map(ex => `<div class="next-ex">${ex.name}</div>`).join('')}
+        ${preview.map(ex => `<div class="next-ex">${ex.name.length > 45 ? ex.name.slice(0,45)+'…' : ex.name}</div>`).join('')}
         ${scheda.exercises.length > 4 ? `<div class="next-ex">+${scheda.exercises.length - 4} altri...</div>` : ''}
       </div>
-      <button class="btn-start" onclick="startSession(${schedaIdx}, ${week})">Inizia allenamento →</button>
+      <button class="btn-start" onclick="startSession(${schedaIdx},${week})">Inizia allenamento →</button>
     </div>`;
 }
 
 function renderVolumeChart() {
-  const canvas = document.getElementById('chartVolume');
-  const ctx = canvas.getContext('2d');
+  const ctx = document.getElementById('chartVolume').getContext('2d');
+  const sorted = Object.entries(state.sessionLogs)
+    .sort(([,a],[,b]) => (a.date||'').localeCompare(b.date||''));
 
-  // Build volume data from session logs
-  const labels = [];
-  const volumes = [];
-
-  const sortedKeys = Object.keys(state.sessionLogs).sort((a, b) => {
-    const da = state.sessionLogs[a].date || '';
-    const db = state.sessionLogs[b].date || '';
-    return da.localeCompare(db);
-  });
-
-  sortedKeys.forEach(key => {
-    const log = state.sessionLogs[key];
+  const labels = [], data = [];
+  sorted.forEach(([key, log]) => {
     const parts = key.split('_');
-    const sIdx = parseInt(parts[parts.length - 1].replace('s', ''));
-    const wIdx = parseInt(parts[parts.length - 2].replace('w', ''));
-    const sc = state.schede[sIdx];
-    if (!sc) return;
-    labels.push(`${sc.name} W${wIdx}`);
+    const si = parseInt(parts[parts.length-1].replace('s',''));
+    const w = parseInt(parts[parts.length-2].replace('w',''));
+    const sc = state.schede[si];
+    labels.push(sc ? `${sc.name} S${w}` : `S${w}`);
     let vol = 0;
-    if (log.exercises) {
-      log.exercises.forEach(ex => {
-        ex.sets?.forEach(set => {
-          const kg = parseFloat(set.kg) || 0;
-          const reps = parseFloat(set.reps) || 0;
-          vol += kg * reps;
-        });
-      });
-    }
-    volumes.push(Math.round(vol));
+    log.exercises?.forEach(ex => ex.sets?.forEach(s => { vol += (parseFloat(s.kg)||0) * (parseFloat(s.reps)||0); }));
+    data.push(Math.round(vol));
   });
 
-  if (chartVolume) chartVolume.destroy();
-
-  chartVolume = new Chart(ctx, {
+  if (chartVolInstance) chartVolInstance.destroy();
+  chartVolInstance = new Chart(ctx, {
     type: 'bar',
     data: {
       labels: labels.length ? labels : ['—'],
-      datasets: [{
-        data: volumes.length ? volumes : [0],
-        backgroundColor: 'rgba(232,255,58,0.7)',
-        borderColor: '#e8ff3a',
-        borderWidth: 1,
-        borderRadius: 4,
-      }]
+      datasets: [{ data: data.length ? data : [0], backgroundColor: 'rgba(232,255,58,0.7)', borderColor: '#e8ff3a', borderWidth: 1, borderRadius: 4 }]
     },
     options: {
       responsive: true,
       plugins: { legend: { display: false }, tooltip: {
-        backgroundColor: '#1c1c1c',
-        borderColor: '#333',
-        borderWidth: 1,
-        titleColor: '#888',
-        bodyColor: '#f0f0f0',
-        callbacks: { label: ctx => ` ${ctx.raw} kg·rip` }
+        backgroundColor: '#1c1c1c', borderColor: '#333', borderWidth: 1,
+        titleColor: '#888', bodyColor: '#f0f0f0',
+        callbacks: { label: c => ` ${c.raw} kg·rip` }
       }},
       scales: {
-        x: { grid: { color: '#2a2a2a' }, ticks: { color: '#555', font: { family: 'DM Mono', size: 10 } } },
-        y: { grid: { color: '#2a2a2a' }, ticks: { color: '#555', font: { family: 'DM Mono', size: 10 } } }
+        x: { grid: { color: '#222' }, ticks: { color: '#555', font: { family: 'DM Mono', size: 10 } } },
+        y: { grid: { color: '#222' }, ticks: { color: '#555', font: { family: 'DM Mono', size: 10 } } }
       }
     }
   });
@@ -406,399 +386,329 @@ function renderVolumeChart() {
 
 function renderStreakGrid() {
   const grid = document.getElementById('streakGrid');
-  const total = 30;
-  const completed = Object.keys(state.sessionLogs).length;
+  const done = Object.keys(state.sessionLogs).length;
+  const total = Math.max(done + 6, 20);
   grid.innerHTML = '';
   for (let i = 0; i < total; i++) {
-    const dot = document.createElement('div');
-    dot.className = 'streak-dot' + (i < completed ? ' done' : '') + (i === completed ? ' today' : '');
-    grid.appendChild(dot);
+    const d = document.createElement('div');
+    d.className = 'streak-dot' + (i < done ? ' done' : '') + (i === done ? ' today' : '');
+    grid.appendChild(d);
   }
 }
 
-/* ─────────────────────────────────────────────────────
+/* ═══════════════════════════════════════════════════
    WORKOUT VIEW
-   ───────────────────────────────────────────────────── */
-let currentWorkoutContext = { schedaIdx: 0, week: 1 };
+   ═══════════════════════════════════════════════════ */
+let ctx = { schedaIdx: 0, week: 1 };
 
 function renderWorkoutView() {
   const sel = document.getElementById('sessionSelectors');
-  if (state.schede.length === 0) {
+  if (!state.schede.length) {
     sel.innerHTML = '';
-    document.getElementById('workoutContent').innerHTML = `<div class="empty-state"><div class="empty-icon">🏋️</div><p>Carica una scheda dall'Import per iniziare</p></div>`;
+    document.getElementById('workoutContent').innerHTML =
+      '<div class="empty-state"><div class="empty-icon">🏋️</div><p>Carica una scheda dall\'Import per iniziare</p></div>';
     return;
   }
 
   sel.innerHTML = `
     <div class="sel-group">
       <div class="sel-label">Scheda</div>
-      <select class="sel" id="selScheda">${state.schede.map((s, i) => `<option value="${i}">${s.name}</option>`).join('')}</select>
+      <select class="sel" id="selScheda">
+        ${state.schede.map((s,i) => `<option value="${i}" ${i===ctx.schedaIdx?'selected':''}>${s.name}</option>`).join('')}
+      </select>
     </div>
     <div class="sel-group">
       <div class="sel-label">Settimana</div>
-      <select class="sel" id="selWeek">${buildWeekOptions()}</select>
+      <select class="sel" id="selWeek">
+        ${weekOptions()}
+      </select>
     </div>`;
 
-  document.getElementById('selScheda').value = currentWorkoutContext.schedaIdx;
-  document.getElementById('selWeek').value = currentWorkoutContext.week;
-
   document.getElementById('selScheda').addEventListener('change', e => {
-    currentWorkoutContext.schedaIdx = parseInt(e.target.value);
-    currentWorkoutContext.week = 1;
-    rebuildWeekOptions();
-    renderExerciseCards();
+    ctx.schedaIdx = parseInt(e.target.value);
+    ctx.week = 1;
+    document.getElementById('selWeek').innerHTML = weekOptions();
+    document.getElementById('selWeek').addEventListener('change', e2 => { ctx.week = parseInt(e2.target.value); renderExercises(); });
+    renderExercises();
   });
   document.getElementById('selWeek').addEventListener('change', e => {
-    currentWorkoutContext.week = parseInt(e.target.value);
-    renderExerciseCards();
+    ctx.week = parseInt(e.target.value);
+    renderExercises();
   });
 
-  renderExerciseCards();
+  renderExercises();
 }
 
-function buildWeekOptions() {
-  const sc = state.schede[currentWorkoutContext.schedaIdx] || state.schede[0];
-  const n = sc?.numWeeks || 4;
-  return Array.from({ length: n }, (_, i) => `<option value="${i+1}">Settimana ${i+1}</option>`).join('');
-}
-
-function rebuildWeekOptions() {
-  const sel = document.getElementById('selWeek');
-  if (sel) sel.innerHTML = buildWeekOptions();
+function weekOptions() {
+  const sc = state.schede[ctx.schedaIdx] || state.schede[0];
+  return Array.from({ length: sc?.numWeeks || 4 }, (_,i) =>
+    `<option value="${i+1}" ${i+1===ctx.week?'selected':''}>Settimana ${i+1}</option>`).join('');
 }
 
 function startSession(schedaIdx, week) {
-  currentWorkoutContext = { schedaIdx, week };
-  document.querySelector('[data-view="workout"]').click();
+  ctx = { schedaIdx, week };
+  navigate('workout');
 }
 
-function renderExerciseCards() {
-  const { schedaIdx, week } = currentWorkoutContext;
-  const scheda = state.schede[schedaIdx];
-  if (!scheda) return;
+function renderExercises() {
+  const { schedaIdx, week } = ctx;
+  const sc = state.schede[schedaIdx];
+  if (!sc) return;
 
-  const sessionKey = `${scheda.id}_w${week}_s${schedaIdx}`;
-  const savedSession = state.sessionLogs[sessionKey];
+  const key = sessionKey(sc.id, week, schedaIdx);
+  const saved = state.sessionLogs[key];
   const wIdx = week - 1;
 
-  const el = document.getElementById('workoutContent');
-  document.getElementById('workoutSub').textContent = `${scheda.name} · Settimana ${week}`;
+  document.getElementById('workoutSub').textContent = `${sc.name} · Settimana ${week}`;
 
-  let html = '<div class="exercises-list">';
+  let html = '';
+  sc.exercises.forEach((ex, exIdx) => {
+    const wd = ex.weeks[wIdx] || ex.weeks[0] || {};
+    const numSets = parseSets(wd.serie);
+    const targetKg = parseKg(wd.kg);
+    const savedEx = saved?.exercises?.[exIdx];
+    const allDone = savedEx?.sets?.length > 0 && savedEx.sets.every(s => s.done);
 
-  scheda.exercises.forEach((ex, exIdx) => {
-    const weekData = ex.weeks[wIdx] || ex.weeks[0];
-    const numSets = parseSets(weekData?.serie);
-    const targetKg = parseKg(weekData?.kg);
-
-    // Load saved set data
-    const savedEx = savedSession?.exercises?.[exIdx];
-    const allDone = savedEx?.sets?.every(s => s.done);
-    const isCompleted = allDone && savedEx?.sets?.length > 0;
-
-    const setsHtml = Array.from({ length: numSets }, (_, sIdx) => {
-      const saved = savedEx?.sets?.[sIdx];
-      const repsVal = saved?.reps ?? (weekData?.ripetizioni || '');
-      const kgVal = saved?.kg ?? (targetKg !== null ? targetKg : '');
-      const doneVal = saved?.done ? 'checked' : '';
-
-      return `<tr class="set-row" data-set="${sIdx}">
-        <td class="set-num">${sIdx + 1}</td>
-        <td><input class="set-input" type="number" placeholder="Rip" value="${repsVal}" data-field="reps" /></td>
-        <td><input class="set-input" type="number" step="0.5" placeholder="Kg" value="${kgVal}" data-field="kg" /></td>
-        <td><input type="checkbox" class="set-done-cb" ${doneVal} /></td>
-        <td class="set-note">${weekData?.recupero ? '⏱ ' + weekData.recupero : ''}</td>
+    const setsRows = Array.from({ length: numSets }, (_, sIdx) => {
+      const s = savedEx?.sets?.[sIdx];
+      return `<tr class="set-row">
+        <td class="set-num">${sIdx+1}</td>
+        <td><input class="set-input" type="number" inputmode="decimal" placeholder="Rip" value="${s?.reps ?? str(wd.ripetizioni).replace(/[^0-9.]/g,'')||''}" data-field="reps"/></td>
+        <td><input class="set-input" type="number" inputmode="decimal" step="0.5" placeholder="Kg" value="${s?.kg ?? (targetKg !== null ? targetKg : '')}" data-field="kg"/></td>
+        <td><input type="checkbox" class="set-done-cb" ${s?.done?'checked':''}></td>
+        <td class="set-note">${wd.recupero ? '⏱'+wd.recupero : ''}</td>
       </tr>`;
     }).join('');
 
     html += `
-      <div class="exercise-card${isCompleted ? ' completed' : ''}" data-ex="${exIdx}">
-        <div class="ex-header${exIdx === 0 ? ' open' : ''}" onclick="toggleExercise(this)">
+      <div class="exercise-card${allDone?' completed':''}" data-ex="${exIdx}">
+        <div class="ex-header${exIdx===0?' open':''}" onclick="toggleEx(this)">
           <div class="ex-left">
-            <div class="ex-check">
-              <svg viewBox="0 0 12 10"><polyline points="1,5 4,9 11,1"/></svg>
-            </div>
-            <div>
+            <div class="ex-check"><svg viewBox="0 0 12 10"><polyline points="1,5 4,9 11,1"/></svg></div>
+            <div class="ex-info">
               <div class="ex-name">${ex.name}</div>
               <div class="ex-meta">
-                <span class="ex-tag">${weekData?.serie || '—'} serie</span>
-                <span class="ex-tag">${weekData?.ripetizioni || '—'} rip</span>
-                ${targetKg !== null ? `<span class="ex-tag">${targetKg} kg</span>` : ''}
+                ${wd.serie ? `<span class="ex-tag">${wd.serie} serie</span>` : ''}
+                ${wd.ripetizioni ? `<span class="ex-tag">${wd.ripetizioni} rip</span>` : ''}
+                ${targetKg !== null && targetKg > 0 ? `<span class="ex-tag">${targetKg}kg</span>` : ''}
               </div>
             </div>
           </div>
           <div class="ex-chevron"><svg viewBox="0 0 14 14"><polyline points="2,4 7,10 12,4"/></svg></div>
         </div>
-        <div class="ex-body${exIdx === 0 ? ' open' : ''}">
+        <div class="ex-body${exIdx===0?' open':''}">
           <div class="target-info">
-            ${weekData?.serie ? `<span class="target-chip">📋 ${weekData.serie} serie</span>` : ''}
-            ${weekData?.ripetizioni ? `<span class="target-chip">🔁 ${weekData.ripetizioni} rip</span>` : ''}
-            ${weekData?.recupero ? `<span class="target-chip">⏱ ${weekData.recupero} rec</span>` : ''}
-            ${targetKg !== null ? `<span class="target-chip">⚖️ ${targetKg > 0 ? targetKg : 'prog.'} kg</span>` : ''}
+            ${wd.serie ? `<span class="target-chip">📋 ${wd.serie} serie</span>` : ''}
+            ${wd.ripetizioni ? `<span class="target-chip">🔁 ${wd.ripetizioni} rip</span>` : ''}
+            ${wd.recupero ? `<span class="target-chip">⏱ ${wd.recupero}</span>` : ''}
+            ${targetKg !== null && targetKg > 0 ? `<span class="target-chip">⚖️ ${targetKg} kg</span>` : ''}
           </div>
           <table class="sets-table">
             <thead><tr><th>#</th><th>Rip</th><th>Kg</th><th>✓</th><th>Rec</th></tr></thead>
-            <tbody>${setsHtml}</tbody>
+            <tbody>${setsRows}</tbody>
           </table>
-          <button class="btn-add-set" onclick="addSet(this, ${exIdx})">+ Aggiungi serie</button>
-          <textarea class="ex-notes-area" placeholder="Note (es. carico percepito, forma, varianti...)" data-ex="${exIdx}">${savedEx?.notes || ''}</textarea>
+          <button class="btn-add-set" onclick="addSet(this,${exIdx})">+ Aggiungi serie</button>
+          <textarea class="ex-notes-area" placeholder="Note (carico percepito, forma, varianti...)">${savedEx?.notes||''}</textarea>
         </div>
       </div>`;
   });
 
-  html += '</div>';
-  html += `<div class="save-session-bar">
-    <button class="btn btn--primary" onclick="saveSession()">💾 Salva sessione</button>
-    ${savedSession ? '<button class="btn btn--danger" onclick="deleteSession()">🗑 Cancella sessione</button>' : ''}
-    ${savedSession ? `<span style="color:var(--text3);font-size:12px;font-family:var(--font-mono)">Salvata il ${new Date(savedSession.date).toLocaleDateString('it-IT')}</span>` : ''}
-  </div>`;
+  const savedDate = saved?.date ? new Date(saved.date).toLocaleDateString('it-IT',{day:'2-digit',month:'short',year:'numeric'}) : null;
+  html += `
+    <div class="save-session-bar">
+      <button class="btn btn--primary" onclick="saveSession()">💾 Salva sessione</button>
+      ${saved ? `<button class="btn btn--danger" onclick="deleteSession()">🗑</button>` : ''}
+      ${savedDate ? `<span style="color:var(--text3);font-size:12px;font-family:var(--font-mono)">Salvata ${savedDate}</span>` : ''}
+    </div>`;
 
+  const el = document.getElementById('workoutContent');
   el.innerHTML = html;
 
-  // Auto-check exercises when all sets done
   el.querySelectorAll('.set-done-cb').forEach(cb => {
-    cb.addEventListener('change', () => checkAutoComplete(cb.closest('.exercise-card')));
+    cb.addEventListener('change', () => autoComplete(cb.closest('.exercise-card')));
   });
 }
 
-function toggleExercise(header) {
-  const body = header.nextElementSibling;
+function toggleEx(header) {
   header.classList.toggle('open');
-  body.classList.toggle('open');
+  header.nextElementSibling.classList.toggle('open');
 }
 
 function addSet(btn, exIdx) {
   const tbody = btn.previousElementSibling.querySelector('tbody');
-  const setNum = tbody.querySelectorAll('tr').length + 1;
+  const n = tbody.querySelectorAll('tr').length + 1;
   const tr = document.createElement('tr');
   tr.className = 'set-row';
-  tr.dataset.set = setNum - 1;
   tr.innerHTML = `
-    <td class="set-num">${setNum}</td>
-    <td><input class="set-input" type="number" placeholder="Rip" data-field="reps" /></td>
-    <td><input class="set-input" type="number" step="0.5" placeholder="Kg" data-field="kg" /></td>
-    <td><input type="checkbox" class="set-done-cb" /></td>
-    <td></td>`;
+    <td class="set-num">${n}</td>
+    <td><input class="set-input" type="number" inputmode="decimal" placeholder="Rip" data-field="reps"/></td>
+    <td><input class="set-input" type="number" inputmode="decimal" step="0.5" placeholder="Kg" data-field="kg"/></td>
+    <td><input type="checkbox" class="set-done-cb"></td><td></td>`;
   tbody.appendChild(tr);
-  tr.querySelector('.set-done-cb').addEventListener('change', () => checkAutoComplete(tr.closest('.exercise-card')));
+  tr.querySelector('.set-done-cb').addEventListener('change', () => autoComplete(tr.closest('.exercise-card')));
 }
 
-function checkAutoComplete(card) {
-  const cbs = card.querySelectorAll('.set-done-cb');
-  const allChecked = [...cbs].every(cb => cb.checked) && cbs.length > 0;
-  card.classList.toggle('completed', allChecked);
+function autoComplete(card) {
+  const cbs = [...card.querySelectorAll('.set-done-cb')];
+  card.classList.toggle('completed', cbs.length > 0 && cbs.every(cb => cb.checked));
 }
 
-function collectSessionData() {
-  const { schedaIdx, week } = currentWorkoutContext;
-  const scheda = state.schede[schedaIdx];
+function collectData() {
   const exercises = [];
-
-  document.querySelectorAll('.exercise-card').forEach((card, exIdx) => {
-    const sets = [];
-    card.querySelectorAll('.set-row').forEach(row => {
-      const reps = row.querySelector('[data-field="reps"]')?.value || '';
-      const kg = row.querySelector('[data-field="kg"]')?.value || '';
-      const done = row.querySelector('.set-done-cb')?.checked || false;
-      sets.push({ reps, kg, done });
-    });
-    const notes = card.querySelector('.ex-notes-area')?.value || '';
-    exercises.push({ name: scheda.exercises[exIdx]?.name, sets, notes });
+  document.querySelectorAll('.exercise-card').forEach((card, i) => {
+    const sets = [...card.querySelectorAll('.set-row')].map(row => ({
+      reps: row.querySelector('[data-field="reps"]')?.value || '',
+      kg: row.querySelector('[data-field="kg"]')?.value || '',
+      done: row.querySelector('.set-done-cb')?.checked || false
+    }));
+    exercises.push({ name: state.schede[ctx.schedaIdx]?.exercises[i]?.name, sets, notes: card.querySelector('.ex-notes-area')?.value || '' });
   });
-
   return exercises;
 }
 
 function saveSession() {
-  const { schedaIdx, week } = currentWorkoutContext;
-  const scheda = state.schede[schedaIdx];
-  const sessionKey = `${scheda.id}_w${week}_s${schedaIdx}`;
-  const exercises = collectSessionData();
-
-  state.sessionLogs[sessionKey] = {
-    exercises,
-    date: new Date().toISOString(),
-    schedaIdx,
-    week,
-    schedaId: scheda.id,
-    schedaName: scheda.name
-  };
-
+  const sc = state.schede[ctx.schedaIdx];
+  if (!sc) return;
+  const key = sessionKey(sc.id, ctx.week, ctx.schedaIdx);
+  state.sessionLogs[key] = { exercises: collectData(), date: new Date().toISOString(), schedaIdx: ctx.schedaIdx, week: ctx.week, schedaId: sc.id, schedaName: sc.name };
   saveState();
   showToast('Sessione salvata!', 'success');
-  renderExerciseCards(); // refresh to show saved state
+  renderExercises();
 }
 
 function deleteSession() {
-  const { schedaIdx, week } = currentWorkoutContext;
-  const scheda = state.schede[schedaIdx];
-  const sessionKey = `${scheda.id}_w${week}_s${schedaIdx}`;
-  delete state.sessionLogs[sessionKey];
+  const sc = state.schede[ctx.schedaIdx];
+  if (!sc) return;
+  const key = sessionKey(sc.id, ctx.week, ctx.schedaIdx);
+  delete state.sessionLogs[key];
   saveState();
   showToast('Sessione eliminata', 'error');
-  renderExerciseCards();
+  renderExercises();
 }
 
-/* ─────────────────────────────────────────────────────
-   ANALYTICS VIEW
-   ───────────────────────────────────────────────────── */
-let analyticsCharts = {};
+/* ═══════════════════════════════════════════════════
+   ANALYTICS
+   ═══════════════════════════════════════════════════ */
+let aCharts = {};
 
 function renderAnalytics() {
   const grid = document.getElementById('analyticsGrid');
   const filters = document.getElementById('analyticsFilters');
+  Object.values(aCharts).forEach(c => c.destroy());
+  aCharts = {};
 
-  if (Object.keys(state.sessionLogs).length === 0) {
-    grid.innerHTML = `<div class="empty-state"><div class="empty-icon">📊</div><p>Completa almeno una sessione per vedere i grafici</p></div>`;
+  const logs = Object.entries(state.sessionLogs).sort(([,a],[,b]) => (a.date||'').localeCompare(b.date||''));
+
+  if (!logs.length) {
+    grid.innerHTML = '<div class="empty-state"><div class="empty-icon">📊</div><p>Completa almeno una sessione per vedere i grafici</p></div>';
     filters.innerHTML = '';
     return;
   }
 
-  // Destroy old charts
-  Object.values(analyticsCharts).forEach(c => c.destroy());
-  analyticsCharts = {};
-
-  // Build exercise list from all schede for filter
-  const allExercises = new Set();
-  state.schede.forEach(sc => sc.exercises.forEach(ex => allExercises.add(ex.name)));
+  const allEx = new Set();
+  state.schede.forEach(sc => sc.exercises.forEach(ex => allEx.add(ex.name)));
 
   filters.innerHTML = `
-    <div class="sel-group">
-      <div class="sel-label">Esercizio</div>
-      <select class="sel" id="selExercise">
-        <option value="">Tutti</option>
-        ${[...allExercises].map(n => `<option value="${n}">${n.length > 30 ? n.slice(0, 30) + '…' : n}</option>`).join('')}
+    <div class="sel-group" style="max-width:300px">
+      <div class="sel-label">Filtra esercizio</div>
+      <select class="sel" id="selEx">
+        <option value="">Tutti gli esercizi</option>
+        ${[...allEx].map(n => `<option value="${n}">${n.length>40?n.slice(0,40)+'…':n}</option>`).join('')}
       </select>
     </div>`;
 
-  document.getElementById('selExercise').addEventListener('change', renderAnalytics);
-
-  const filterEx = document.getElementById('selExercise')?.value || '';
+  document.getElementById('selEx').addEventListener('change', renderAnalytics);
+  const filterEx = document.getElementById('selEx')?.value || '';
 
   grid.innerHTML = `
     <div class="card card--wide">
-      <div class="card-label">Progressione Carichi (Kg medio per sessione)</div>
+      <div class="card-label">Carico medio per sessione (Kg)</div>
       <canvas id="chartKg" height="100"></canvas>
     </div>
     <div class="card">
       <div class="card-label">Volume per sessione (Kg × Rip)</div>
-      <canvas id="chartVolAnal" height="140"></canvas>
+      <canvas id="chartVolA" height="150"></canvas>
     </div>
     <div class="card">
-      <div class="card-label">Riepilogo sessioni</div>
-      <div id="sessionSummary" style="display:flex;flex-direction:column;gap:8px;max-height:260px;overflow-y:auto;"></div>
+      <div class="card-label">Storico sessioni</div>
+      <div id="sessionList" style="display:flex;flex-direction:column;gap:8px;max-height:280px;overflow-y:auto;padding-right:4px"></div>
     </div>`;
 
-  // Build datasets
-  const sessions = Object.entries(state.sessionLogs)
-    .map(([key, log]) => ({ key, log }))
-    .sort((a, b) => (a.log.date || '').localeCompare(b.log.date || ''));
+  const kgLabels=[], kgData=[], vLabels=[], vData=[];
 
-  const kgLabels = [], kgData = [], volLabels = [], volData = [];
-
-  sessions.forEach(({ key, log }) => {
-    const label = `${log.schedaName || '?'} W${log.week}`;
-    let totalKg = 0, countKg = 0, totalVol = 0;
-
+  logs.forEach(([key, log]) => {
+    const parts = key.split('_');
+    const si = parseInt(parts[parts.length-1].replace('s',''));
+    const w = parseInt(parts[parts.length-2].replace('w',''));
+    const sc = state.schede[si];
+    const label = sc ? `${sc.name} S${w}` : `S${w}`;
+    let totKg=0, cntKg=0, vol=0;
     log.exercises?.forEach(ex => {
       if (filterEx && ex.name !== filterEx) return;
-      ex.sets?.forEach(set => {
-        const kg = parseFloat(set.kg) || 0;
-        const reps = parseFloat(set.reps) || 0;
-        if (kg > 0) { totalKg += kg; countKg++; }
-        totalVol += kg * reps;
+      ex.sets?.forEach(s => {
+        const kg = parseFloat(s.kg)||0, reps = parseFloat(s.reps)||0;
+        if (kg>0) { totKg+=kg; cntKg++; }
+        vol += kg*reps;
       });
     });
-
-    kgLabels.push(label);
-    kgData.push(countKg > 0 ? Math.round((totalKg / countKg) * 10) / 10 : 0);
-    volLabels.push(label);
-    volData.push(Math.round(totalVol));
+    kgLabels.push(label); kgData.push(cntKg>0 ? Math.round(totKg/cntKg*10)/10 : 0);
+    vLabels.push(label); vData.push(Math.round(vol));
   });
 
-  const chartDefaults = {
-    plugins: { legend: { display: false }, tooltip: {
-      backgroundColor: '#1c1c1c', borderColor: '#333', borderWidth: 1,
-      titleColor: '#888', bodyColor: '#f0f0f0'
+  const chartOpts = (label) => ({
+    responsive:true,
+    plugins:{ legend:{display:false}, tooltip:{
+      backgroundColor:'#1c1c1c',borderColor:'#333',borderWidth:1,
+      titleColor:'#888',bodyColor:'#f0f0f0',
+      callbacks:{label:c=>` ${c.raw} ${label}`}
     }},
-    scales: {
-      x: { grid: { color: '#2a2a2a' }, ticks: { color: '#555', font: { family: 'DM Mono', size: 10 } } },
-      y: { grid: { color: '#2a2a2a' }, ticks: { color: '#555', font: { family: 'DM Mono', size: 10 } } }
+    scales:{
+      x:{grid:{color:'#222'},ticks:{color:'#555',font:{family:'DM Mono',size:10}}},
+      y:{grid:{color:'#222'},ticks:{color:'#555',font:{family:'DM Mono',size:10}}}
     }
-  };
-
-  analyticsCharts.kg = new Chart(document.getElementById('chartKg'), {
-    type: 'line',
-    data: {
-      labels: kgLabels,
-      datasets: [{
-        data: kgData,
-        borderColor: '#e8ff3a',
-        backgroundColor: 'rgba(232,255,58,0.08)',
-        tension: 0.3,
-        fill: true,
-        pointBackgroundColor: '#e8ff3a',
-        pointRadius: 4,
-        pointHoverRadius: 6,
-      }]
-    },
-    options: { ...chartDefaults, responsive: true }
   });
 
-  analyticsCharts.vol = new Chart(document.getElementById('chartVolAnal'), {
-    type: 'bar',
-    data: {
-      labels: volLabels,
-      datasets: [{
-        data: volData,
-        backgroundColor: 'rgba(58,255,140,0.6)',
-        borderColor: '#3aff8c',
-        borderWidth: 1,
-        borderRadius: 4
-      }]
-    },
-    options: { ...chartDefaults, responsive: true }
+  aCharts.kg = new Chart(document.getElementById('chartKg'),{
+    type:'line',
+    data:{labels:kgLabels,datasets:[{data:kgData,borderColor:'#e8ff3a',backgroundColor:'rgba(232,255,58,0.08)',tension:0.3,fill:true,pointBackgroundColor:'#e8ff3a',pointRadius:4}]},
+    options:chartOpts('kg medio')
   });
 
-  // Session summary list
-  const summEl = document.getElementById('sessionSummary');
-  sessions.slice().reverse().forEach(({ key, log }) => {
+  aCharts.vol = new Chart(document.getElementById('chartVolA'),{
+    type:'bar',
+    data:{labels:vLabels,datasets:[{data:vData,backgroundColor:'rgba(58,255,140,0.6)',borderColor:'#3aff8c',borderWidth:1,borderRadius:4}]},
+    options:chartOpts('kg·rip')
+  });
+
+  const list = document.getElementById('sessionList');
+  [...logs].reverse().forEach(([key,log]) => {
+    const date = log.date ? new Date(log.date).toLocaleDateString('it-IT',{day:'2-digit',month:'short',year:'numeric'}) : '—';
     const div = document.createElement('div');
-    div.style.cssText = 'background:var(--bg3);border-radius:6px;padding:10px 12px;border:1px solid var(--border);';
-    const date = log.date ? new Date(log.date).toLocaleDateString('it-IT', { day: '2-digit', month: 'short', year: 'numeric' }) : '—';
-    const exCount = log.exercises?.length || 0;
-    div.innerHTML = `
-      <div style="display:flex;justify-content:space-between;align-items:center;">
-        <span style="font-family:var(--font-display);letter-spacing:1px;font-size:16px;">${log.schedaName} — S${log.week}</span>
-        <span style="font-family:var(--font-mono);font-size:11px;color:var(--text3);">${date}</span>
-      </div>
-      <div style="color:var(--text3);font-size:11px;margin-top:4px;">${exCount} esercizi</div>`;
-    summEl.appendChild(div);
+    div.style.cssText = 'background:var(--bg3);border-radius:8px;padding:10px 12px;border:1px solid var(--border)';
+    div.innerHTML = `<div style="display:flex;justify-content:space-between;align-items:center">
+      <span style="font-family:var(--font-d);font-size:16px;letter-spacing:1px">${log.schedaName||'?'} — S${log.week}</span>
+      <span style="font-family:var(--font-mono);font-size:11px;color:var(--text3)">${date}</span>
+    </div>
+    <div style="color:var(--text3);font-size:11px;margin-top:4px">${log.exercises?.length||0} esercizi</div>`;
+    list.appendChild(div);
   });
 }
 
-/* ─────────────────────────────────────────────────────
+/* ═══════════════════════════════════════════════════
    TOAST
-   ───────────────────────────────────────────────────── */
-function showToast(msg, type = 'info') {
+   ═══════════════════════════════════════════════════ */
+function showToast(msg, type='info') {
   const t = document.createElement('div');
   t.className = `toast ${type}`;
-  t.innerHTML = `<span>${type === 'success' ? '✓' : type === 'error' ? '✕' : 'ℹ'}</span> ${msg}`;
-  document.body.appendChild(t);
-  setTimeout(() => t.remove(), 3000);
+  t.innerHTML = `<span>${type==='success'?'✓':type==='error'?'✕':'ℹ'}</span>${msg}`;
+  document.getElementById('toastContainer').appendChild(t);
+  setTimeout(()=>t.remove(), 3000);
 }
 
-/* ─────────────────────────────────────────────────────
+/* ═══════════════════════════════════════════════════
    INIT
-   ───────────────────────────────────────────────────── */
-function init() {
-  loadState();
-
-  // Init workout context to next session
-  const { schedaIdx, week } = getNextSession();
-  currentWorkoutContext = { schedaIdx, week };
-
-  renderDashboard();
-}
-
-init();
+   ═══════════════════════════════════════════════════ */
+loadState();
+const next = getNextSession();
+ctx = { schedaIdx: next.schedaIdx, week: next.week || 1 };
+renderDashboard();
