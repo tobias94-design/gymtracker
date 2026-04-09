@@ -1,0 +1,167 @@
+<!DOCTYPE html>
+<html lang="it">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>GymTracker — Tobia</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link href="https://fonts.googleapis.com/css2?family=Bebas+Neue&family=DM+Sans:wght@300;400;500;600&family=DM+Mono:wght@400;500&display=swap" rel="stylesheet" />
+  <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+
+  <!-- SIDEBAR NAV -->
+  <nav class="sidebar">
+    <div class="logo">GT</div>
+    <div class="nav-links">
+      <button class="nav-btn active" data-view="dashboard" title="Dashboard">
+        <svg viewBox="0 0 24 24"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg>
+      </button>
+      <button class="nav-btn" data-view="workout" title="Allenamento">
+        <svg viewBox="0 0 24 24"><path d="M6 4v16M18 4v16M3 8h3M18 8h3M3 16h3M18 16h3M6 12h12"/></svg>
+      </button>
+      <button class="nav-btn" data-view="analytics" title="Analytics">
+        <svg viewBox="0 0 24 24"><polyline points="22,12 18,12 15,21 9,3 6,12 2,12"/></svg>
+      </button>
+      <button class="nav-btn" data-view="import" title="Importa Scheda">
+        <svg viewBox="0 0 24 24"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17,8 12,3 7,8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
+      </button>
+    </div>
+    <div class="sidebar-bottom">
+      <div class="week-badge" id="sidebarWeek">W—</div>
+    </div>
+  </nav>
+
+  <!-- MAIN CONTENT -->
+  <main class="main">
+
+    <!-- DASHBOARD VIEW -->
+    <section class="view active" id="view-dashboard">
+      <div class="view-header">
+        <div>
+          <h1 class="view-title">Dashboard</h1>
+          <p class="view-sub" id="dashSub">Carica una scheda per iniziare</p>
+        </div>
+        <div class="header-right">
+          <div class="stat-pill" id="pillScheda">—</div>
+        </div>
+      </div>
+
+      <div class="dash-grid">
+        <div class="card card--accent" id="cardProgress">
+          <div class="card-label">Progressione Scheda</div>
+          <div class="progress-visual">
+            <div class="progress-ring-wrap">
+              <svg class="progress-ring" viewBox="0 0 80 80">
+                <circle class="ring-bg" cx="40" cy="40" r="34"/>
+                <circle class="ring-fill" id="ringFill" cx="40" cy="40" r="34" stroke-dasharray="213.6" stroke-dashoffset="213.6"/>
+              </svg>
+              <div class="ring-label" id="ringLabel">0%</div>
+            </div>
+            <div class="progress-stats">
+              <div class="pstat"><span class="pstat-n" id="pCompletati">0</span><span class="pstat-l">Completati</span></div>
+              <div class="pstat"><span class="pstat-n" id="pTotali">0</span><span class="pstat-l">Totali</span></div>
+              <div class="pstat"><span class="pstat-n" id="pSettimana">—</span><span class="pstat-l">Settimana</span></div>
+            </div>
+          </div>
+        </div>
+
+        <div class="card" id="cardNext">
+          <div class="card-label">Prossimo Allenamento</div>
+          <div id="nextWorkoutContent" class="next-empty">Nessuna scheda caricata</div>
+        </div>
+
+        <div class="card card--wide" id="cardVolume">
+          <div class="card-label">Volume Totale per Sessione (kg × rip)</div>
+          <canvas id="chartVolume" height="120"></canvas>
+        </div>
+
+        <div class="card" id="cardStreak">
+          <div class="card-label">Allenamenti Completati</div>
+          <div class="streak-grid" id="streakGrid"></div>
+        </div>
+      </div>
+    </section>
+
+    <!-- WORKOUT VIEW -->
+    <section class="view" id="view-workout">
+      <div class="view-header">
+        <div>
+          <h1 class="view-title">Allenamento</h1>
+          <p class="view-sub" id="workoutSub">Seleziona scheda e settimana</p>
+        </div>
+        <div class="session-selectors" id="sessionSelectors"></div>
+      </div>
+
+      <div id="workoutContent">
+        <div class="empty-state">
+          <div class="empty-icon">🏋️</div>
+          <p>Carica una scheda dall'Import per iniziare</p>
+        </div>
+      </div>
+    </section>
+
+    <!-- ANALYTICS VIEW -->
+    <section class="view" id="view-analytics">
+      <div class="view-header">
+        <div>
+          <h1 class="view-title">Analytics</h1>
+          <p class="view-sub">Progressione carichi e volume</p>
+        </div>
+        <div class="analytics-filters" id="analyticsFilters"></div>
+      </div>
+      <div class="analytics-grid" id="analyticsGrid">
+        <div class="empty-state">
+          <div class="empty-icon">📊</div>
+          <p>Completa almeno una sessione per vedere i grafici</p>
+        </div>
+      </div>
+    </section>
+
+    <!-- IMPORT VIEW -->
+    <section class="view" id="view-import">
+      <div class="view-header">
+        <div>
+          <h1 class="view-title">Importa Scheda</h1>
+          <p class="view-sub">Carica il tuo file Excel</p>
+        </div>
+      </div>
+
+      <div class="import-area" id="importArea">
+        <div class="drop-zone" id="dropZone">
+          <div class="drop-icon">
+            <svg viewBox="0 0 64 64" fill="none" stroke="currentColor" stroke-width="2">
+              <rect x="8" y="8" width="48" height="48" rx="4"/>
+              <path d="M32 44V24M24 32l8-8 8 8"/>
+              <path d="M20 48h24"/>
+            </svg>
+          </div>
+          <p class="drop-title">Trascina il file Excel qui</p>
+          <p class="drop-sub">oppure</p>
+          <label class="btn-upload">
+            Seleziona file
+            <input type="file" id="fileInput" accept=".xlsx,.xls" hidden />
+          </label>
+          <p class="drop-formats">Supporta .xlsx — Struttura: blocchi SETTIMANA 1…4 × Esercizio / Serie / Rip / Recupero / KG</p>
+        </div>
+      </div>
+
+      <div id="importPreview" class="import-preview hidden">
+        <div class="preview-header">
+          <h2 id="previewTitle">Scheda rilevata</h2>
+          <div class="preview-actions">
+            <button class="btn btn--ghost" id="btnReimport">Ricarica altro file</button>
+            <button class="btn btn--primary" id="btnConfirm">Conferma e salva scheda</button>
+          </div>
+        </div>
+        <div id="previewCards" class="preview-cards"></div>
+      </div>
+    </section>
+
+  </main>
+
+  <script src="app.js"></script>
+</body>
+</html>
