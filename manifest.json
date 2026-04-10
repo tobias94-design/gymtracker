@@ -1,0 +1,10 @@
+{
+  "name": "GymTracker",
+  "short_name": "GymTracker",
+  "start_url": "/gymtracker/",
+  "scope": "/gymtracker/",
+  "display": "standalone",
+  "background_color": "#ffffff",
+  "theme_color": "#ff3b30",
+  "icons": []
+}
