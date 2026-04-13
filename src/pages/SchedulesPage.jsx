@@ -2,7 +2,6 @@ import { useState, useEffect } from 'react';
 import { useAuth } from '../context/AuthContext';
 import { parseWorkoutExcel } from '../utils/excelParser';
 import { saveSchedule, getSchedules, deleteSchedule } from '../utils/db';
-import { Upload, Trash2, ChevronRight, Calendar, Dumbbell, CheckCircle } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 
 export default function SchedulesPage() {
@@ -18,191 +17,181 @@ export default function SchedulesPage() {
   useEffect(() => { fetchSchedules(); }, []);
 
   const fetchSchedules = async () => {
-    try {
-      const data = await getSchedules(user.uid);
-      setSchedules(data);
-    } finally {
-      setLoading(false);
-    }
+    try { const data = await getSchedules(user.uid); setSchedules(data); }
+    finally { setLoading(false); }
   };
 
   const handleFile = async (file) => {
-    if (!file?.name.endsWith('.xlsx') && !file?.name.endsWith('.xls')) {
-      setError('Carica un file Excel (.xlsx)');
-      return;
-    }
-    setUploading(true);
-    setError('');
+    if (!file?.name.match(/\.(xlsx|xls)$/i)) { setError('Carica un file Excel (.xlsx)'); return; }
+    setUploading(true); setError('');
     try {
       const schedule = await parseWorkoutExcel(file);
       schedule.name = file.name.replace(/\.[^.]+$/, '');
       await saveSchedule(user.uid, schedule);
-      setSuccess(`Scheda "${schedule.name}" caricata con successo!`);
+      setSuccess(`Scheda "${schedule.name}" importata con successo.`);
       await fetchSchedules();
       setTimeout(() => setSuccess(''), 4000);
-    } catch (e) {
-      setError('Errore nel parsing del file: ' + e.message);
-    } finally {
-      setUploading(false);
-    }
+    } catch (e) { setError('Errore nel parsing: ' + e.message); }
+    finally { setUploading(false); }
   };
 
-  const handleDrop = (e) => {
-    e.preventDefault();
-    setDrag(false);
-    handleFile(e.dataTransfer.files[0]);
-  };
-
+  const handleDrop = (e) => { e.preventDefault(); setDrag(false); handleFile(e.dataTransfer.files[0]); };
   const handleDelete = async (id, name) => {
-    if (!confirm(`Eliminare la scheda "${name}"?`)) return;
+    if (!confirm(`Eliminare "${name}"?`)) return;
     await deleteSchedule(user.uid, id);
-    setSchedules((prev) => prev.filter((s) => s.id !== id));
+    setSchedules(prev => prev.filter(s => s.id !== id));
   };
 
   return (
-    <div className="container section fade-in">
-      <div style={{ marginBottom: 32 }}>
-        <h2>Le mie schede</h2>
-        <p style={{ color: 'var(--text-secondary)', marginTop: 6 }}>
-          Carica la tua scheda Excel e inizia ad allenarti
-        </p>
-      </div>
-
-      {/* Upload zone */}
-      <div
-        onDragOver={(e) => { e.preventDefault(); setDrag(true); }}
-        onDragLeave={() => setDrag(false)}
-        onDrop={handleDrop}
-        style={{
-          border: `2px dashed ${drag ? 'var(--accent)' : 'var(--border)'}`,
-          borderRadius: 'var(--radius-xl)',
-          padding: '48px 32px',
-          textAlign: 'center',
-          background: drag ? 'var(--accent-muted)' : 'var(--bg-secondary)',
-          transition: 'all 0.2s',
-          cursor: 'pointer',
-          marginBottom: 32,
-        }}
-        onClick={() => document.getElementById('file-input').click()}
-      >
-        <input
-          id="file-input"
-          type="file"
-          accept=".xlsx,.xls"
-          style={{ display: 'none' }}
-          onChange={(e) => handleFile(e.target.files[0])}
-        />
-        <div style={{
-          width: 56, height: 56,
-          background: drag ? 'var(--accent)' : 'var(--bg-tertiary)',
-          borderRadius: 'var(--radius-md)',
-          display: 'flex', alignItems: 'center', justifyContent: 'center',
-          margin: '0 auto 16px',
-          transition: 'all 0.2s',
-        }}>
-          {uploading
-            ? <div className="spinner" />
-            : <Upload size={24} color={drag ? 'white' : 'var(--text-secondary)'} />
-          }
-        </div>
-        <h4 style={{ marginBottom: 8 }}>
-          {uploading ? 'Caricamento in corso...' : 'Trascina il tuo Excel qui'}
-        </h4>
-        <p style={{ color: 'var(--text-secondary)', fontSize: '0.875rem' }}>
-          o clicca per selezionare un file .xlsx
-        </p>
-
-        {/* Format hint */}
-        <div style={{
-          marginTop: 24, padding: '12px 16px',
-          background: 'var(--bg)', border: '1px solid var(--border-light)',
-          borderRadius: 'var(--radius-md)', display: 'inline-block', textAlign: 'left',
-        }}>
-          <p style={{ fontSize: '0.78rem', color: 'var(--text-tertiary)', marginBottom: 4, fontWeight: 500 }}>
-            FORMATO ATTESO
-          </p>
-          <p style={{ fontSize: '0.8rem', color: 'var(--text-secondary)', fontFamily: 'var(--font-mono)' }}>
-            SETTIMANA 1 | SETTIMANA 2 | SETTIMANA 3 | SETTIMANA 4
-          </p>
-          <p style={{ fontSize: '0.8rem', color: 'var(--text-secondary)', fontFamily: 'var(--font-mono)' }}>
-            ESERCIZIO | SERIE | RIPETIZIONI | RECUPERO | KG
+    <div style={{ paddingBottom: 80 }}>
+      {/* Header */}
+      <div style={{
+        background: 'var(--surface-container-low)',
+        borderBottom: '1px solid rgba(68,72,79,0.2)',
+        padding: '40px 0 28px',
+      }}>
+        <div className="container">
+          <p className="label-xs" style={{ color: 'var(--secondary)', marginBottom: 8 }}>DATA INGESTION MODULE</p>
+          <h1>Importa Scheda</h1>
+          <p style={{ color: 'var(--on-surface-variant)', marginTop: 8, fontSize: '0.875rem' }}>
+            Carica il tuo Excel e il sistema parserà automaticamente la struttura.
           </p>
         </div>
       </div>
 
-      {error && (
-        <div style={{
-          padding: '12px 16px', borderRadius: 'var(--radius-md)',
-          background: 'var(--accent-muted)', border: '1px solid var(--accent-muted-border)',
-          color: 'var(--accent)', marginBottom: 20, fontSize: '0.875rem',
-        }}>
-          {error}
-        </div>
-      )}
+      <div className="container section fade-in">
+        {/* Upload zone */}
+        <div
+          onDragOver={e => { e.preventDefault(); setDrag(true); }}
+          onDragLeave={() => setDrag(false)}
+          onDrop={handleDrop}
+          onClick={() => document.getElementById('file-input').click()}
+          style={{
+            border: `2px dashed ${drag ? 'var(--primary)' : 'rgba(68,72,79,0.4)'}`,
+            borderRadius: 'var(--radius-xl)',
+            padding: '56px 32px',
+            textAlign: 'center',
+            background: drag ? 'rgba(161,255,194,0.04)' : 'var(--surface-container-low)',
+            transition: 'all 0.2s',
+            cursor: 'pointer',
+            marginBottom: 32,
+            position: 'relative', overflow: 'hidden',
+          }}
+        >
+          <input id="file-input" type="file" accept=".xlsx,.xls" style={{ display: 'none' }} onChange={e => handleFile(e.target.files[0])} />
+          
+          <div style={{
+            position: 'absolute', top: 0, left: 0, right: 0, bottom: 0,
+            background: drag ? 'radial-gradient(ellipse at center, rgba(161,255,194,0.06) 0%, transparent 70%)' : 'none',
+            pointerEvents: 'none',
+          }} />
 
-      {success && (
-        <div style={{
-          padding: '12px 16px', borderRadius: 'var(--radius-md)',
-          background: 'rgba(52,199,89,0.1)', border: '1px solid rgba(52,199,89,0.3)',
-          color: 'var(--success)', marginBottom: 20, fontSize: '0.875rem',
-          display: 'flex', alignItems: 'center', gap: 8,
-        }}>
-          <CheckCircle size={16} /> {success}
-        </div>
-      )}
+          <span className="material-symbols-outlined" style={{
+            fontSize: 52, color: drag ? 'var(--primary)' : 'var(--secondary)',
+            display: 'block', marginBottom: 16,
+            filter: drag ? 'drop-shadow(0 0 12px rgba(161,255,194,0.4))' : 'none',
+            transition: 'all 0.2s',
+          }}>
+            {uploading ? 'sync' : 'upload_file'}
+          </span>
 
-      {/* Schedules list */}
-      {loading ? (
-        <div style={{ textAlign: 'center', padding: '48px', color: 'var(--text-secondary)' }}>
-          <div className="spinner" style={{ margin: '0 auto' }} />
-        </div>
-      ) : schedules.length === 0 ? (
-        <div style={{ textAlign: 'center', padding: '48px', color: 'var(--text-secondary)' }}>
-          <Dumbbell size={40} style={{ opacity: 0.3, marginBottom: 12 }} />
-          <p>Nessuna scheda caricata</p>
-        </div>
-      ) : (
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
-          {schedules.map((s) => (
-            <div key={s.id} className="card" style={{ display: 'flex', alignItems: 'center', gap: 16 }}>
-              <div style={{
-                width: 44, height: 44, borderRadius: 'var(--radius-md)',
-                background: 'var(--accent-muted)', display: 'flex',
-                alignItems: 'center', justifyContent: 'center', flexShrink: 0,
-              }}>
-                <Dumbbell size={20} color="var(--accent)" />
-              </div>
+          <h3 style={{ marginBottom: 8, color: 'var(--on-surface)' }}>
+            {uploading ? 'PARSING IN CORSO...' : 'DRAG & DROP SOURCE FILE'}
+          </h3>
+          <p style={{ color: 'var(--on-surface-variant)', fontSize: '0.82rem', marginBottom: 24 }}>
+            Supporta .XLSX — formato scheda allenamento
+          </p>
 
-              <div style={{ flex: 1, minWidth: 0 }}>
-                <h4 style={{ marginBottom: 4 }}>{s.name || 'Scheda senza nome'}</h4>
-                <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap' }}>
-                  <span style={{ fontSize: '0.8rem', color: 'var(--text-secondary)', display: 'flex', alignItems: 'center', gap: 4 }}>
-                    <Calendar size={12} /> {s.weeks ?? 4} settimane
-                  </span>
-                  <span style={{ fontSize: '0.8rem', color: 'var(--text-secondary)', display: 'flex', alignItems: 'center', gap: 4 }}>
-                    <Dumbbell size={12} /> {s.days?.length ?? 0} giorni
-                  </span>
-                </div>
-              </div>
+          {!uploading && (
+            <button className="btn btn-secondary" onClick={e => e.stopPropagation()}>
+              <span className="material-symbols-outlined" style={{ fontSize: 16 }}>folder_open</span>
+              SELEZIONA FILE
+            </button>
+          )}
+          {uploading && <div className="spinner" style={{ margin: '0 auto' }} />}
 
-              <div style={{ display: 'flex', gap: 8 }}>
-                <button
-                  className="btn btn-primary btn-sm"
-                  onClick={() => navigate(`/workout?schedule=${s.id}`)}
-                >
-                  Allena <ChevronRight size={14} />
-                </button>
-                <button
-                  className="btn btn-danger btn-sm btn-icon"
-                  onClick={() => handleDelete(s.id, s.name)}
-                >
-                  <Trash2 size={14} />
-                </button>
-              </div>
+          {/* Format hint */}
+          <div style={{
+            marginTop: 28, padding: '12px 16px',
+            background: 'var(--surface-container)',
+            borderRadius: 'var(--radius-lg)',
+            display: 'inline-block', textAlign: 'left',
+          }}>
+            <p className="label-xs" style={{ color: 'var(--outline)', marginBottom: 6 }}>SCHEMA ATTESO</p>
+            <p style={{ fontSize: '0.75rem', color: 'var(--on-surface-variant)', fontFamily: 'monospace' }}>
+              SETTIMANA 1 | SETTIMANA 2 | SETTIMANA 3 | SETTIMANA 4
+            </p>
+            <p style={{ fontSize: '0.75rem', color: 'var(--on-surface-variant)', fontFamily: 'monospace' }}>
+              ESERCIZIO | SERIE | RIPETIZIONI | RECUPERO | KG
+            </p>
+          </div>
+        </div>
+
+        {error && (
+          <div style={{
+            padding: '12px 16px', borderRadius: 'var(--radius-lg)',
+            background: 'rgba(255,113,108,0.08)', border: '1px solid rgba(255,113,108,0.2)',
+            color: 'var(--error)', marginBottom: 20, fontSize: '0.82rem',
+            display: 'flex', alignItems: 'center', gap: 8,
+          }}>
+            <span className="material-symbols-outlined" style={{ fontSize: 16 }}>error</span>
+            {error}
+          </div>
+        )}
+        {success && (
+          <div style={{
+            padding: '12px 16px', borderRadius: 'var(--radius-lg)',
+            background: 'rgba(161,255,194,0.08)', border: '1px solid rgba(161,255,194,0.2)',
+            color: 'var(--primary)', marginBottom: 20, fontSize: '0.82rem',
+            display: 'flex', alignItems: 'center', gap: 8,
+          }}>
+            <span className="material-symbols-outlined" style={{ fontSize: 16 }}>check_circle</span>
+            {success}
+          </div>
+        )}
+
+        {/* Schedules list */}
+        <div>
+          <p className="label-xs" style={{ color: 'var(--secondary)', marginBottom: 16 }}>SCHEDE IMPORTATE</p>
+          {loading ? (
+            <div style={{ textAlign: 'center', padding: 48 }}><div className="spinner" style={{ margin: '0 auto' }} /></div>
+          ) : schedules.length === 0 ? (
+            <div style={{ textAlign: 'center', padding: 48, color: 'var(--on-surface-variant)' }}>
+              <span className="material-symbols-outlined" style={{ fontSize: 36, display: 'block', marginBottom: 8, opacity: 0.3 }}>inbox</span>
+              <p style={{ fontSize: '0.875rem' }}>Nessuna scheda importata</p>
             </div>
-          ))}
+          ) : (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+              {schedules.map(s => (
+                <div key={s.id} className="card accent-line" style={{ display: 'flex', alignItems: 'center', gap: 16 }}>
+                  <div style={{
+                    width: 44, height: 44, borderRadius: 'var(--radius-lg)',
+                    background: 'rgba(0,210,253,0.1)', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0,
+                  }}>
+                    <span className="material-symbols-outlined" style={{ fontSize: 22, color: 'var(--secondary)' }}>fitness_center</span>
+                  </div>
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <h4 style={{ marginBottom: 4, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{s.name || 'Scheda'}</h4>
+                    <div style={{ display: 'flex', gap: 12 }}>
+                      <span className="label-xs" style={{ color: 'var(--outline)' }}>{s.weeks ?? 4} settimane</span>
+                      <span className="label-xs" style={{ color: 'var(--outline)' }}>{s.days?.length ?? 0} giorni</span>
+                    </div>
+                  </div>
+                  <div style={{ display: 'flex', gap: 8 }}>
+                    <button className="btn btn-primary btn-sm" onClick={() => navigate(`/workout?schedule=${s.id}`)}>
+                      ALLENA
+                      <span className="material-symbols-outlined" style={{ fontSize: 14 }}>chevron_right</span>
+                    </button>
+                    <button className="btn btn-danger btn-sm btn-icon" onClick={() => handleDelete(s.id, s.name)}>
+                      <span className="material-symbols-outlined" style={{ fontSize: 15 }}>delete</span>
+                    </button>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
         </div>
-      )}
+      </div>
     </div>
   );
 }

@@ -2,7 +2,6 @@ import { useState, useEffect } from 'react';
 import { useAuth } from '../context/AuthContext';
 import { getSessions, getSchedules } from '../utils/db';
 import { useNavigate } from 'react-router-dom';
-import { Dumbbell, Flame, Calendar, TrendingUp, ChevronRight, Clock, Target } from 'lucide-react';
 import { format, parseISO, subDays, isToday, isYesterday } from 'date-fns';
 import { it } from 'date-fns/locale';
 
@@ -19,208 +18,213 @@ export default function DashboardPage() {
       .finally(() => setLoading(false));
   }, []);
 
-  // Compute stats
-  const last7 = sessions.filter((s) => {
-    const d = parseISO(s.date);
-    return d >= subDays(new Date(), 7);
-  });
-
+  const last7 = sessions.filter(s => parseISO(s.date) >= subDays(new Date(), 7));
   const streak = (() => {
-    const dates = [...new Set(sessions.map((s) => s.date))].sort().reverse();
-    let count = 0;
-    let check = new Date();
+    const dates = [...new Set(sessions.map(s => s.date))].sort().reverse();
+    let count = 0, check = new Date();
     for (const d of dates) {
       const sd = parseISO(d);
-      const diff = Math.floor((check - sd) / 86400000);
-      if (diff <= 1) { count++; check = sd; } else break;
+      if (Math.floor((check - sd) / 86400000) <= 1) { count++; check = sd; } else break;
     }
     return count;
   })();
+  const totalVolume = sessions.reduce((acc, s) => acc + Object.values(s.logs || {}).flatMap(ex =>
+    Object.values(ex).map(set => (parseFloat(set.kg) || 0) * (parseInt(set.reps) || 0))
+  ).reduce((a, b) => a + b, 0), 0);
 
-  const totalVolume = sessions.reduce((acc, s) => {
-    if (!s.logs) return acc;
-    return acc + Object.values(s.logs).flatMap((ex) =>
-      Object.values(ex).map((set) => (parseFloat(set.kg) || 0) * (parseInt(set.reps) || 0))
-    ).reduce((a, b) => a + b, 0);
-  }, 0);
-
-  const labelDate = (d) => {
-    const parsed = parseISO(d);
-    if (isToday(parsed)) return 'Oggi';
-    if (isYesterday(parsed)) return 'Ieri';
-    return format(parsed, 'd MMM', { locale: it });
+  const labelDate = d => {
+    const p = parseISO(d);
+    if (isToday(p)) return 'Oggi';
+    if (isYesterday(p)) return 'Ieri';
+    return format(p, 'd MMM', { locale: it });
   };
 
   if (loading) return (
-    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '60vh' }}>
+    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '80vh' }}>
       <div className="spinner" />
     </div>
   );
 
   const firstName = (user.displayName || user.email)?.split(/[@\s]/)[0];
   const hour = new Date().getHours();
-  const greeting = hour < 12 ? 'Buongiorno' : hour < 18 ? 'Buon pomeriggio' : 'Buonasera';
+  const greeting = hour < 12 ? 'BUONGIORNO' : hour < 18 ? 'BUON POMERIGGIO' : 'BUONASERA';
 
   return (
-    <div className="container section fade-in" style={{ paddingBottom: 60 }}>
-
-      {/* Greeting */}
-      <div style={{ marginBottom: 36 }}>
-        <p style={{ color: 'var(--text-secondary)', fontSize: '0.9rem', marginBottom: 4 }}>{greeting}</p>
-        <h2>{firstName} 👋</h2>
-        <p style={{ color: 'var(--text-secondary)', marginTop: 6 }}>
-          {sessions.length === 0
-            ? 'Inizia caricando la tua prima scheda.'
-            : `${sessions.length} allenamenti completati. Continua così.`}
-        </p>
+    <div style={{ paddingBottom: 80 }}>
+      {/* Hero section */}
+      <div style={{
+        background: 'linear-gradient(135deg, var(--surface-container-low) 0%, var(--background) 100%)',
+        borderBottom: '1px solid rgba(68,72,79,0.2)',
+        padding: '40px 0 32px',
+        position: 'relative', overflow: 'hidden',
+      }}>
+        <div style={{
+          position: 'absolute', top: 0, right: 0, width: '40%', height: '100%',
+          background: 'radial-gradient(ellipse at right, rgba(0,210,253,0.05) 0%, transparent 70%)',
+          pointerEvents: 'none',
+        }} />
+        <div className="container">
+          <p className="label-xs" style={{ color: 'var(--secondary)', marginBottom: 8 }}>{greeting}, ATLETA</p>
+          <h1 style={{ color: 'var(--on-surface)', marginBottom: 8 }}>{firstName}</h1>
+          <p style={{ color: 'var(--on-surface-variant)', fontSize: '0.875rem' }}>
+            {sessions.length === 0 ? 'Carica la tua prima scheda per iniziare.' : `${sessions.length} sessioni registrate nel Performance Lab.`}
+          </p>
+        </div>
       </div>
 
-      {/* Stats */}
-      <div className="grid-4" style={{ marginBottom: 32 }}>
-        {[
-          { label: 'Streak', value: streak, unit: 'giorni', icon: Flame, color: '#ff9f0a' },
-          { label: 'Questa settimana', value: last7.length, unit: 'sessioni', icon: Calendar, color: 'var(--accent)' },
-          { label: 'Totale sessioni', value: sessions.length, unit: 'totali', icon: Dumbbell, color: 'var(--success)' },
-          { label: 'Volume totale', value: totalVolume >= 1000 ? `${(totalVolume/1000).toFixed(1)}t` : `${Math.round(totalVolume)}`, unit: 'kg sollevati', icon: TrendingUp, color: '#5e5ce6' },
-        ].map(({ label, value, unit, icon: Icon, color }) => (
-          <div key={label} className="stat-box">
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 8 }}>
-              <span className="stat-label">{label}</span>
-              <Icon size={16} style={{ color }} />
-            </div>
-            <div className="stat-value" style={{ color }}>{value}</div>
-            <div style={{ fontSize: '0.75rem', color: 'var(--text-tertiary)', marginTop: 2 }}>{unit}</div>
-          </div>
-        ))}
-      </div>
-
-      {/* Quick actions */}
-      <div style={{ marginBottom: 32 }}>
-        <h3 style={{ marginBottom: 16 }}>Inizia ad allenarti</h3>
-        {schedules.length === 0 ? (
-          <div className="card" style={{ textAlign: 'center', padding: '32px' }}>
-            <Dumbbell size={32} style={{ color: 'var(--text-tertiary)', marginBottom: 12 }} />
-            <p style={{ color: 'var(--text-secondary)', marginBottom: 16 }}>Nessuna scheda caricata</p>
-            <button className="btn btn-primary" onClick={() => navigate('/schedules')}>
-              Carica scheda Excel
-            </button>
-          </div>
-        ) : (
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-            {schedules.slice(0, 3).map((s) => (
-              <div key={s.id} className="card"
-                style={{ display: 'flex', alignItems: 'center', gap: 14, cursor: 'pointer' }}
-                onClick={() => navigate(`/workout?schedule=${s.id}`)}>
-                <div style={{
-                  width: 40, height: 40, borderRadius: 'var(--radius-sm)',
-                  background: 'var(--accent-muted)', display: 'flex',
-                  alignItems: 'center', justifyContent: 'center', flexShrink: 0,
-                }}>
-                  <Dumbbell size={18} color="var(--accent)" />
-                </div>
-                <div style={{ flex: 1 }}>
-                  <div style={{ fontWeight: 600, fontSize: '0.9rem' }}>{s.name}</div>
-                  <div style={{ fontSize: '0.78rem', color: 'var(--text-secondary)' }}>
-                    {s.days?.length} giorni · {s.weeks} settimane
-                  </div>
-                </div>
-                <ChevronRight size={16} style={{ color: 'var(--text-tertiary)' }} />
+      <div className="container section fade-in">
+        {/* Stats */}
+        <div className="grid-4" style={{ marginBottom: 36 }}>
+          {[
+            { label: 'Streak', value: streak, unit: 'giorni', icon: 'local_fire_department', color: 'var(--tertiary)' },
+            { label: 'Questa settimana', value: last7.length, unit: 'sessioni', icon: 'calendar_today', color: 'var(--secondary)' },
+            { label: 'Totale sessioni', value: sessions.length, unit: 'completate', icon: 'fitness_center', color: 'var(--primary)' },
+            {
+              label: 'Volume totale',
+              value: totalVolume >= 1000 ? `${(totalVolume / 1000).toFixed(1)}t` : `${Math.round(totalVolume)}`,
+              unit: 'kg sollevati', icon: 'monitoring', color: 'var(--primary-dim)',
+            },
+          ].map(({ label, value, unit, icon, color }) => (
+            <div key={label} className="stat-box" style={{ position: 'relative', overflow: 'hidden' }}>
+              <div style={{
+                position: 'absolute', top: -10, right: -10,
+                width: 60, height: 60,
+                background: `radial-gradient(ellipse, ${color}15 0%, transparent 70%)`,
+              }} />
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 10 }}>
+                <span className="stat-label">{label}</span>
+                <span className="material-symbols-outlined" style={{ fontSize: 18, color }}>{icon}</span>
               </div>
-            ))}
-          </div>
-        )}
-      </div>
+              <div className="stat-value" style={{ color }}>{value}</div>
+              <div style={{ fontSize: '0.65rem', color: 'var(--outline)', marginTop: 4, fontWeight: 600, letterSpacing: '0.06em', textTransform: 'uppercase' }}>{unit}</div>
+            </div>
+          ))}
+        </div>
 
-      {/* Recent sessions */}
-      {sessions.length > 0 && (
-        <div>
+        {/* Quick start */}
+        <div style={{ marginBottom: 36 }}>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
-            <h3>Sessioni recenti</h3>
-            <button className="btn btn-ghost btn-sm" onClick={() => navigate('/analytics')}>
-              Vedi tutto <ChevronRight size={13} />
+            <p className="label-xs" style={{ color: 'var(--secondary)' }}>SCHEDE ATTIVE</p>
+            <button className="btn btn-ghost btn-sm" onClick={() => navigate('/schedules')}>
+              <span className="material-symbols-outlined" style={{ fontSize: 14 }}>add</span>
+              Importa
             </button>
           </div>
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-            {sessions.slice(0, 5).map((s) => {
-              const vol = Object.values(s.logs || {}).flatMap((ex) =>
-                Object.values(ex).map((set) => (parseFloat(set.kg) || 0) * (parseInt(set.reps) || 0))
-              ).reduce((a, b) => a + b, 0);
-              return (
-                <div key={s.id} style={{
-                  display: 'flex', alignItems: 'center', gap: 12,
-                  padding: '12px 16px', background: 'var(--bg-secondary)',
-                  border: '1px solid var(--border-light)', borderRadius: 'var(--radius-md)',
-                }}>
+
+          {schedules.length === 0 ? (
+            <div className="card" style={{ textAlign: 'center', padding: '40px 24px', background: 'var(--surface-container-low)' }}>
+              <span className="material-symbols-outlined" style={{ fontSize: 40, color: 'var(--outline)', marginBottom: 12, display: 'block' }}>upload_file</span>
+              <p style={{ color: 'var(--on-surface-variant)', marginBottom: 20, fontSize: '0.875rem' }}>Nessuna scheda importata</p>
+              <button className="btn btn-primary" onClick={() => navigate('/schedules')}>IMPORTA EXCEL</button>
+            </div>
+          ) : (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+              {schedules.slice(0, 3).map(s => (
+                <div key={s.id} className="card accent-line"
+                  style={{ display: 'flex', alignItems: 'center', gap: 14, cursor: 'pointer', transition: 'background 0.15s' }}
+                  onClick={() => navigate(`/workout?schedule=${s.id}`)}
+                  onMouseEnter={e => e.currentTarget.style.background = 'var(--surface-container-high)'}
+                  onMouseLeave={e => e.currentTarget.style.background = 'var(--surface-container)'}
+                >
                   <div style={{
-                    width: 36, height: 36, borderRadius: 'var(--radius-sm)',
-                    background: 'var(--accent-muted)', display: 'flex',
-                    alignItems: 'center', justifyContent: 'center', flexShrink: 0,
-                    fontSize: '0.85rem', fontWeight: 700, color: 'var(--accent)',
+                    width: 40, height: 40, borderRadius: 'var(--radius-lg)',
+                    background: 'rgba(0,210,253,0.1)', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0,
                   }}>
-                    {s.dayLabel?.split(' ')[1]}
+                    <span className="material-symbols-outlined" style={{ fontSize: 20, color: 'var(--secondary)' }}>fitness_center</span>
                   </div>
                   <div style={{ flex: 1 }}>
-                    <div style={{ fontSize: '0.875rem', fontWeight: 500 }}>
-                      {s.scheduleName} · {s.dayLabel}
-                    </div>
-                    <div style={{ fontSize: '0.78rem', color: 'var(--text-secondary)' }}>
-                      Settimana {s.week} · {labelDate(s.date)}
+                    <div style={{ fontWeight: 600, fontSize: '0.9rem', fontFamily: 'var(--font-headline)' }}>{s.name}</div>
+                    <div style={{ fontSize: '0.7rem', color: 'var(--on-surface-variant)', marginTop: 2 }}>
+                      <span className="label-xs" style={{ color: 'var(--outline)' }}>{s.days?.length} giorni</span>
+                      <span style={{ margin: '0 6px', color: 'var(--outline-variant)' }}>·</span>
+                      <span className="label-xs" style={{ color: 'var(--outline)' }}>{s.weeks} settimane</span>
                     </div>
                   </div>
-                  <div style={{ textAlign: 'right' }}>
-                    {s.duration > 0 && (
-                      <div style={{ fontSize: '0.78rem', color: 'var(--text-secondary)', display: 'flex', alignItems: 'center', gap: 4, justifyContent: 'flex-end' }}>
-                        <Clock size={11} /> {Math.floor(s.duration/60)}m
-                      </div>
-                    )}
-                    {vol > 0 && (
-                      <div style={{ fontSize: '0.78rem', color: 'var(--text-secondary)' }}>
-                        {Math.round(vol)} kg vol.
-                      </div>
-                    )}
-                  </div>
+                  <span className="material-symbols-outlined" style={{ fontSize: 18, color: 'var(--outline)' }}>chevron_right</span>
                 </div>
-              );
-            })}
-          </div>
+              ))}
+            </div>
+          )}
         </div>
-      )}
 
-      {/* Heatmap cal mini */}
-      {sessions.length > 0 && <WorkoutHeatmap sessions={sessions} />}
+        {/* Recent sessions */}
+        {sessions.length > 0 && (
+          <div style={{ marginBottom: 36 }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
+              <p className="label-xs" style={{ color: 'var(--secondary)' }}>SESSIONI RECENTI</p>
+              <button className="btn btn-ghost btn-sm" onClick={() => navigate('/analytics')}>
+                Vedi tutto <span className="material-symbols-outlined" style={{ fontSize: 14 }}>chevron_right</span>
+              </button>
+            </div>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+              {sessions.slice(0, 5).map(s => {
+                const vol = Object.values(s.logs || {}).flatMap(ex =>
+                  Object.values(ex).map(set => (parseFloat(set.kg) || 0) * (parseInt(set.reps) || 0))
+                ).reduce((a, b) => a + b, 0);
+                return (
+                  <div key={s.id} style={{
+                    display: 'flex', alignItems: 'center', gap: 12,
+                    padding: '12px 16px', background: 'var(--surface-container-low)',
+                    borderRadius: 'var(--radius-xl)',
+                  }}>
+                    <div style={{
+                      width: 34, height: 34, borderRadius: 'var(--radius-lg)',
+                      background: 'rgba(161,255,194,0.1)', display: 'flex', alignItems: 'center', justifyContent: 'center',
+                      fontSize: '0.78rem', fontWeight: 700, color: 'var(--primary)',
+                      fontFamily: 'var(--font-headline)',
+                    }}>
+                      {s.dayLabel?.split(' ')[1]}
+                    </div>
+                    <div style={{ flex: 1 }}>
+                      <div style={{ fontSize: '0.85rem', fontWeight: 600 }}>{s.dayLabel} · Sett. {s.week}</div>
+                      <div style={{ fontSize: '0.7rem', color: 'var(--on-surface-variant)', marginTop: 1 }}>
+                        {s.scheduleName} · {labelDate(s.date)}
+                      </div>
+                    </div>
+                    <div style={{ textAlign: 'right' }}>
+                      {s.duration > 0 && (
+                        <div style={{ fontSize: '0.7rem', color: 'var(--on-surface-variant)' }}>{Math.floor(s.duration / 60)}m</div>
+                      )}
+                      {vol > 0 && <div style={{ fontSize: '0.78rem', color: 'var(--primary)', fontWeight: 700 }}>{Math.round(vol)}kg</div>}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        )}
+
+        {/* Heatmap */}
+        {sessions.length > 0 && <WorkoutHeatmap sessions={sessions} />}
+      </div>
     </div>
   );
 }
 
 function WorkoutHeatmap({ sessions }) {
-  const dates = new Set(sessions.map((s) => s.date));
-  const days = Array.from({ length: 84 }, (_, i) => {
-    const d = subDays(new Date(), 83 - i);
-    return format(d, 'yyyy-MM-dd');
-  });
-
+  const days = Array.from({ length: 84 }, (_, i) => format(subDays(new Date(), 83 - i), 'yyyy-MM-dd'));
   return (
-    <div style={{ marginTop: 32 }}>
-      <h3 style={{ marginBottom: 16 }}>Attività — ultimi 3 mesi</h3>
+    <div>
+      <p className="label-xs" style={{ color: 'var(--secondary)', marginBottom: 16 }}>ATTIVITÀ — ULTIMI 3 MESI</p>
       <div style={{ display: 'flex', flexWrap: 'wrap', gap: 3 }}>
-        {days.map((d) => {
-          const count = sessions.filter((s) => s.date === d).length;
+        {days.map(d => {
+          const count = sessions.filter(s => s.date === d).length;
           return (
             <div key={d} title={d} style={{
               width: 12, height: 12, borderRadius: 2,
-              background: count > 0 ? 'var(--accent)' : 'var(--bg-tertiary)',
-              opacity: count > 0 ? Math.min(0.4 + count * 0.4, 1) : 1,
-              transition: 'background 0.2s',
+              background: count > 0 ? 'var(--primary)' : 'var(--surface-container)',
+              opacity: count > 0 ? Math.min(0.3 + count * 0.4, 1) : 1,
+              boxShadow: count > 0 ? '0 0 4px rgba(161,255,194,0.3)' : 'none',
             }} />
           );
         })}
       </div>
-      <div style={{ display: 'flex', gap: 8, marginTop: 8, alignItems: 'center' }}>
-        <span style={{ fontSize: '0.72rem', color: 'var(--text-tertiary)' }}>Meno</span>
-        {[0.15, 0.4, 0.65, 1].map((o, i) => (
-          <div key={i} style={{ width: 12, height: 12, borderRadius: 2, background: `rgba(255,59,48,${o})` }} />
+      <div style={{ display: 'flex', gap: 8, marginTop: 10, alignItems: 'center' }}>
+        <span style={{ fontSize: '0.65rem', color: 'var(--outline)', fontWeight: 600, letterSpacing: '0.06em', textTransform: 'uppercase' }}>Meno</span>
+        {[0.2, 0.45, 0.7, 1].map((o, i) => (
+          <div key={i} style={{ width: 10, height: 10, borderRadius: 2, background: `rgba(161,255,194,${o})` }} />
         ))}
-        <span style={{ fontSize: '0.72rem', color: 'var(--text-tertiary)' }}>Più</span>
+        <span style={{ fontSize: '0.65rem', color: 'var(--outline)', fontWeight: 600, letterSpacing: '0.06em', textTransform: 'uppercase' }}>Più</span>
       </div>
     </div>
   );
